@@ -6,8 +6,10 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Neon: pooled connection for the app, direct connection for migrations.
+  directUrl = env("DIRECT_URL")
 }
 
 /// Canonical item identity (a unique base/name, not a single listing).

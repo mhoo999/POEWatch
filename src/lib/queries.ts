@@ -35,6 +35,7 @@ export async function getItemSearch(query?: string): Promise<ItemSearchResult[]>
         name: item.name,
         baseType: item.baseType,
         category: item.category,
+        iconUrl: item.iconUrl,
         medianPrice: snap?.medianPrice ?? null,
         validListings: snap?.validListings ?? 0,
         totalListings: item._count.listings,
@@ -50,6 +51,7 @@ export interface ItemDetail {
   name: string;
   baseType: string;
   category: string;
+  iconUrl: string | null;
   listings: Array<{
     id: string;
     priceAmount: number | null;
@@ -78,6 +80,7 @@ export async function getItemDetail(id: string): Promise<ItemDetail | null> {
       name: item.name,
       baseType: item.baseType,
       category: item.category,
+      iconUrl: item.iconUrl,
       listings: item.listings.map((l) => ({
         id: l.id,
         priceAmount: l.priceAmount,

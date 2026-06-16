@@ -19,10 +19,24 @@ export default async function ItemDetailPage({
         <Link href="/search" className="text-sm opacity-60 hover:opacity-100">
           ← 검색으로
         </Link>
-        <h1 className="mt-2 text-2xl font-bold text-[var(--accent)]">{item.name}</h1>
-        <p className="opacity-60">
-          {item.baseType} · {item.category}
-        </p>
+        <div className="mt-2 flex items-center gap-4">
+          {item.iconUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={item.iconUrl}
+              alt={item.name}
+              className="h-16 w-16 shrink-0 object-contain"
+            />
+          ) : (
+            <div className="h-16 w-16 shrink-0 rounded bg-[var(--border)]" />
+          )}
+          <div>
+            <h1 className="text-2xl font-bold text-[var(--accent)]">{item.name}</h1>
+            <p className="opacity-60">
+              {item.baseType} · {item.category}
+            </p>
+          </div>
+        </div>
       </div>
 
       <section>

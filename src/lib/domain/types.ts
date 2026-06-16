@@ -44,6 +44,7 @@ export interface ItemSearchResult {
   name: string;
   baseType: string;
   category: Category;
+  iconUrl: string | null;
   medianPrice: number | null;
   validListings: number;
   totalListings: number;

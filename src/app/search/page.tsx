@@ -53,10 +53,25 @@ export default async function SearchPage({
               {results.map((r) => (
                 <tr key={r.id} className="border-t border-[var(--border)]">
                   <td className="px-4 py-2">
-                    <Link href={`/items/${r.id}`} className="text-[var(--accent)] hover:underline">
-                      {r.name}
-                    </Link>
-                    <div className="text-xs opacity-50">{r.baseType}</div>
+                    <div className="flex items-center gap-3">
+                      {r.iconUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={r.iconUrl}
+                          alt=""
+                          loading="lazy"
+                          className="h-8 w-8 shrink-0 object-contain"
+                        />
+                      ) : (
+                        <div className="h-8 w-8 shrink-0 rounded bg-[var(--border)]" />
+                      )}
+                      <div>
+                        <Link href={`/items/${r.id}`} className="text-[var(--accent)] hover:underline">
+                          {r.name}
+                        </Link>
+                        <div className="text-xs opacity-50">{r.baseType}</div>
+                      </div>
+                    </div>
                   </td>
                   <td className="px-4 py-2 opacity-80">{r.category}</td>
                   <td className="px-4 py-2">{r.medianPrice ?? "—"}</td>
