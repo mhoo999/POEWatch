@@ -1,10 +1,10 @@
 /**
- * poe.ninja ingestion entrypoint.
+ * poe.ninja (EE2 proxy) ingestion entrypoint.
  *   npm run ingest
  *
- * Populates the DB with PoE2 unique items (name, poecdn icon, price, supply)
- * so the dashboard shows real data. Run from an environment with internet
- * access to poe.ninja and a reachable DATABASE_URL.
+ * Populates the DB with PoE2 unique items (name, base/variant, price in Divine
+ * Orbs) plus currency conversion rates so the dashboard shows real data. Run
+ * from an environment with internet access and a reachable DATABASE_URL.
  */
 import "dotenv/config";
 import { prisma } from "@/lib/db";
@@ -13,7 +13,10 @@ import { PoeNinjaError } from "@/lib/poeninja/client";
 
 async function main() {
   const summary = await runIngest();
-  console.log(`[ingest] league=${summary.league} itemsUpserted=${summary.itemsUpserted}`);
+  console.log(
+    `[ingest] league=${summary.league} slug=${summary.slug} ` +
+      `itemsUpserted=${summary.itemsUpserted} ratesUpserted=${summary.ratesUpserted}`,
+  );
   for (const [type, n] of Object.entries(summary.byType)) {
     console.log(`[ingest]   ${type}: ${n}`);
   }
@@ -22,8 +25,9 @@ async function main() {
   }
   if (summary.itemsUpserted === 0) {
     console.error(
-      "[ingest] No items ingested. The poe.ninja PoE2 item-overview path may be " +
-        "wrong — confirm it via the browser network tab and set POENINJA_ITEM_PATH.",
+      "[ingest] No items ingested. Check that POE_LEAGUE maps to a live proxy " +
+        "slug (league | leaguehc | standard | standardhc), or set " +
+        "POENINJA_LEAGUE_SLUG explicitly.",
     );
   }
 }

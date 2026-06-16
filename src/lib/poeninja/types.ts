@@ -1,51 +1,55 @@
 /**
- * Raw response shapes for the poe.ninja PoE2 economy API.
+ * Response shapes for the Exiled Exchange 2 (EE2) poe.ninja PoE2 proxy.
  *
- * NOTE: poe.ninja's PoE2 endpoints are undocumented (discovered via network
- * interception) and may differ from these shapes. Fields are permissive
- * (optional) and the mapper (./map.ts) tolerates missing data. The exact
- * item-overview endpoint/field names must be confirmed at implementation time
- * by inspecting poe.ninja/poe2/economy network requests — see ./client.ts.
+ *   GET https://api.exiledexchange2.dev/proxy/{slug}/overviewData.json
+ *   slug ∈ league | leaguehc | standard | standardhc
+ *
+ * EE2 mirrors poe.ninja's PoE2 economy into a single CDN-cached JSON covering
+ * every category (currency + all unique buckets) in one request. This avoids
+ * poe.ninja's Cloudflare gating and per-endpoint rate limits. Shapes below were
+ * confirmed against live data (see src/lib/poeninja/client.ts header).
+ *
+ * Prices: every `primaryValue` is denominated in `core.primary` (Divine Orb).
+ * `core.rates` gives how many of each currency equal ONE primary unit, e.g.
+ * { exalted: 177.8, chaos: 12.34 } ⇒ 1 divine = 177.8 exalted = 12.34 chaos.
  */
 
-/** Price trend mini-series attached to an item line. */
+/** Price trend mini-series attached to a line. */
 export interface NinjaSparkline {
   data?: Array<number | null>;
   totalChange?: number;
 }
 
-/** One row in an item-overview response (a unique, gem, etc.). */
-export interface NinjaItemLine {
-  id?: number;
+/** One row in an item/currency overview (a unique, an orb, etc.). */
+export interface NinjaLine {
   name?: string;
-  baseType?: string;
-  itemType?: string;
-  icon?: string; // web.poecdn.com URL
-  // Price fields (any subset may be present depending on item type).
-  chaosValue?: number;
-  exaltedValue?: number;
-  divineValue?: number;
-  // Number of listings observed (effective supply, roughly).
-  count?: number;
-  listingCount?: number;
+  /** Base/variant label, e.g. "Scimitar" for The Dancing Dervish. */
+  variant?: string;
+  /** Price in the primary currency (Divine Orb). */
+  primaryValue?: number;
+  /** Stable slug poe.ninja uses for the detail page, e.g. "the-dancing-dervish". */
+  detailsId?: string;
+  id?: number;
   sparkline?: NinjaSparkline;
-  // Mods, when present.
-  explicitModifiers?: Array<{ text?: string }>;
-  implicitModifiers?: Array<{ text?: string }>;
 }
 
-export interface NinjaItemOverviewResponse {
-  lines?: NinjaItemLine[];
+/** A category block within the proxy payload. `type` is plural, e.g. "UniqueWeapons". */
+export interface NinjaOverview {
+  type: string;
+  lines: NinjaLine[];
 }
 
-/** Currency-exchange overview line (PoE2 currencyexchange endpoint). */
-export interface NinjaCurrencyLine {
-  currencyTypeName?: string;
-  // Value expressed in the base currency (varies by endpoint version).
-  chaosEquivalent?: number;
-  value?: number;
+/** Conversion context shared by the whole payload. */
+export interface NinjaCore {
+  /** Units of each currency per ONE `primary`. */
+  rates: Record<string, number>;
+  /** The currency `primaryValue` is expressed in (e.g. "divine"). */
+  primary: string;
+  secondary?: string;
 }
 
-export interface NinjaCurrencyOverviewResponse {
-  lines?: NinjaCurrencyLine[];
+/** Top-level EE2 proxy response. */
+export interface NinjaProxyResponse {
+  core: NinjaCore;
+  itemOverviews: NinjaOverview[];
 }

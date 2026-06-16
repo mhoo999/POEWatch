@@ -1,30 +1,32 @@
-import type {
-  NinjaCurrencyOverviewResponse,
-  NinjaItemOverviewResponse,
-} from "./types";
+import type { NinjaProxyResponse } from "./types";
 
 /**
- * Client for the poe.ninja PoE2 economy API.
+ * Client for the Exiled Exchange 2 (EE2) poe.ninja PoE2 proxy.
  *
- * Endpoints (undocumented, discovered via network interception):
- *   - Currency (confirmed):
- *       GET {base}/poe2/api/economy/currencyexchange/overview
- *           ?leagueName={league}&overviewName=Currency
- *   - Items (NOT publicly documented — CONFIRM before relying on it):
- *       Inspect poe.ninja/poe2/economy in the browser network tab to capture
- *       the real item-overview request. The path below mirrors the PoE1 shape
- *       ({base}/poe2/api/data/itemoverview?league=&type=UniqueWeapon) and is a
- *       best-effort default; override via overviewPath if it differs.
+ *   GET https://api.exiledexchange2.dev/proxy/{slug}/overviewData.json
  *
- * poe.ninja rate limit is roughly 12 requests / 5 minutes, so we apply a
- * polite delay between calls. A descriptive User-Agent is sent.
+ * Why the proxy instead of poe.ninja directly:
+ *   - poe.ninja's PoE2 economy API (`/poe2/api/economy/...`) sits behind
+ *     Cloudflare and returns 404/403 to non-browser clients, so server-side
+ *     ingestion can't reach it reliably.
+ *   - poe.ninja has no PoE2 "dense overview" endpoint, so a direct scrape needs
+ *     ~13 throttled requests per run.
+ *   - EE2 publishes ONE CDN-cached JSON with every category (currency + all
+ *     unique buckets). One request, no auth, no rate-limit headaches.
+ *
+ * League slugs (case-insensitive display name → proxy slug):
+ *   current softcore  → "league"     | current hardcore → "leaguehc"
+ *   Standard          → "standard"   | Hardcore Std     → "standardhc"
+ * Override explicitly with POENINJA_LEAGUE_SLUG when the heuristic is wrong.
+ *
+ * Confirmed against live data 2026-06: top keys { core, itemOverviews };
+ * unique line keys { name, variant, primaryValue, detailsId, sparkline };
+ * core { rates: { exalted, chaos }, primary: "divine" }.
  */
 
-const MIN_DELAY_MS = 1500;
+const PROXY_BASE = "https://api.exiledexchange2.dev/proxy";
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+export type NinjaLeagueSlug = "league" | "leaguehc" | "standard" | "standardhc";
 
 export class PoeNinjaError extends Error {
   constructor(
@@ -37,90 +39,79 @@ export class PoeNinjaError extends Error {
   }
 }
 
-export interface PoeNinjaClientOptions {
-  league: string;
-  base?: string;
-  userAgent?: string;
-  /** Override the item-overview path template if confirmed to differ. */
-  itemOverviewPath?: string;
-}
-
-/** PoE2 item-overview categories worth ingesting first (uniques). */
-export const NINJA_ITEM_TYPES = [
-  "UniqueWeapon",
-  "UniqueArmour",
-  "UniqueAccessory",
-  "UniqueFlask",
-  "UniqueJewel",
+/** Unique categories we ingest, keyed by the proxy's (plural) `type` label. */
+export const NINJA_UNIQUE_TYPES = [
+  "UniqueWeapons",
+  "UniqueArmours",
+  "UniqueAccessories",
+  "UniqueFlasks",
+  "UniqueCharms",
+  "UniqueJewels",
+  "UniqueTablets",
+  "UniqueSanctumRelics",
 ] as const;
 
-export type NinjaItemType = (typeof NINJA_ITEM_TYPES)[number];
+export type NinjaUniqueType = (typeof NINJA_UNIQUE_TYPES)[number];
+
+/** Best-effort map of a league display name to the proxy slug. */
+export function leagueToSlug(league: string): NinjaLeagueSlug {
+  const l = league.trim().toLowerCase();
+  const hardcore = /\b(hc|hardcore)\b/.test(l);
+  const standard = l.includes("standard");
+  if (standard) return hardcore ? "standardhc" : "standard";
+  return hardcore ? "leaguehc" : "league";
+}
+
+export interface PoeNinjaClientOptions {
+  /** Proxy league slug. Takes precedence over `league`-derived slug. */
+  slug: NinjaLeagueSlug;
+  base?: string;
+  userAgent?: string;
+}
 
 export class PoeNinjaClient {
-  private readonly league: string;
+  readonly slug: NinjaLeagueSlug;
   private readonly base: string;
   private readonly userAgent: string;
-  private readonly itemOverviewPath: string;
-  private lastRequestAt = 0;
 
   constructor(opts: PoeNinjaClientOptions) {
-    this.league = opts.league;
-    this.base = (opts.base ?? "https://poe.ninja").replace(/\/$/, "");
+    this.slug = opts.slug;
+    this.base = (opts.base ?? PROXY_BASE).replace(/\/$/, "");
     this.userAgent =
       opts.userAgent ?? "poewatch/0.1 (+https://github.com/mhoo999/poewatch)";
-    // PoE1-style default; confirm against the live PoE2 site.
-    this.itemOverviewPath = opts.itemOverviewPath ?? "/poe2/api/data/itemoverview";
   }
 
-  private async throttle(): Promise<void> {
-    const elapsed = Date.now() - this.lastRequestAt;
-    if (elapsed < MIN_DELAY_MS) await sleep(MIN_DELAY_MS - elapsed);
-    this.lastRequestAt = Date.now();
-  }
-
-  private async getJson<T>(url: string): Promise<T> {
-    await this.throttle();
+  /** Fetch the full economy snapshot (currency + all unique categories). */
+  async getOverview(): Promise<NinjaProxyResponse> {
+    const url = `${this.base}/${this.slug}/overviewData.json`;
     const res = await fetch(url, {
       headers: { "User-Agent": this.userAgent, Accept: "application/json" },
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new PoeNinjaError(
-        `poe.ninja request failed (${res.status}) for ${url}`,
+        `EE2 proxy request failed (${res.status}) for ${url}`,
         res.status,
         body.slice(0, 300),
       );
     }
-    return (await res.json()) as T;
-  }
-
-  /** Fetch an item overview (e.g. "UniqueWeapon"). */
-  async getItemOverview(type: string): Promise<NinjaItemOverviewResponse> {
-    const url =
-      `${this.base}${this.itemOverviewPath}` +
-      `?league=${encodeURIComponent(this.league)}&type=${encodeURIComponent(type)}`;
-    return this.getJson<NinjaItemOverviewResponse>(url);
-  }
-
-  /** Fetch the currency-exchange overview (confirmed endpoint). */
-  async getCurrencyOverview(): Promise<NinjaCurrencyOverviewResponse> {
-    const url =
-      `${this.base}/poe2/api/economy/currencyexchange/overview` +
-      `?leagueName=${encodeURIComponent(this.league)}&overviewName=Currency`;
-    return this.getJson<NinjaCurrencyOverviewResponse>(url);
+    return (await res.json()) as NinjaProxyResponse;
   }
 }
 
 /** Construct a client from environment variables. */
 export function ninjaClientFromEnv(): PoeNinjaClient {
+  const explicit = process.env.POENINJA_LEAGUE_SLUG?.trim().toLowerCase();
   const league = process.env.POE_LEAGUE;
-  if (!league) {
-    throw new Error("POE_LEAGUE must be set (see .env.example).");
+  if (!explicit && !league) {
+    throw new Error(
+      "Set POE_LEAGUE (or POENINJA_LEAGUE_SLUG) so the proxy slug can be resolved (see .env.example).",
+    );
   }
+  const slug = (explicit as NinjaLeagueSlug) || leagueToSlug(league!);
   return new PoeNinjaClient({
-    league,
+    slug,
     base: process.env.POENINJA_BASE || undefined,
     userAgent: process.env.POE_USER_AGENT || undefined,
-    itemOverviewPath: process.env.POENINJA_ITEM_PATH || undefined,
   });
 }

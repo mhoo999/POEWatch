@@ -1,25 +1,33 @@
 import { prisma } from "@/lib/db";
 import {
   ninjaClientFromEnv,
-  NINJA_ITEM_TYPES,
+  NINJA_UNIQUE_TYPES,
   PoeNinjaClient,
 } from "@/lib/poeninja/client";
 import { mapNinjaLine, type NinjaMappedItem } from "@/lib/poeninja/map";
+import type { NinjaProxyResponse } from "@/lib/poeninja/types";
 
 /**
- * poe.ninja ingestion (shared by `npm run ingest` and /api/cron/ingest).
+ * poe.ninja (EE2 proxy) ingestion — shared by `npm run ingest` and
+ * /api/cron/ingest.
  *
- * poe.ninja is an aggregate source: one row per item with a summarized price
- * and listing count. We upsert the canonical Item (with its poecdn iconUrl),
- * a single synthetic aggregate ItemListing (so the detail page isn't empty),
- * an ItemSnapshot (price + supply), and append a PriceHistory point so a real
- * time series builds up across runs.
+ * The proxy is an AGGREGATE source: one row per unique with a summarized price
+ * (in Divine Orbs) and NO icon or listing/supply count. Per item we upsert the
+ * canonical Item, a single synthetic aggregate ItemListing (so the detail page
+ * isn't empty), an ItemSnapshot, and append a PriceHistory point so a real time
+ * series builds up across runs. We also persist currency conversion rates from
+ * the payload's `core` block. Prices are kept in Divine Orbs (the base unit);
+ * supply is recorded as 0 because the proxy does not expose listing counts.
  */
+
+const BASE_CURRENCY = "divine";
 
 export interface IngestSummary {
   league: string;
+  slug: string;
   itemsUpserted: number;
   byType: Record<string, number>;
+  ratesUpserted: number;
   errors: Array<{ type: string; message: string }>;
 }
 
@@ -45,16 +53,16 @@ async function persistItem(m: NinjaMappedItem, league: string): Promise<void> {
       league,
       rawHash: m.rawHash,
       sellerAccount: null,
-      priceAmount: m.priceAmount,
-      priceCurrency: m.priceCurrency,
-      priceInBase: m.priceAmount,
+      priceAmount: m.priceDivine,
+      priceCurrency: BASE_CURRENCY,
+      priceInBase: m.priceDivine,
       isOutlier: false,
       listedAt: new Date(),
     },
     update: {
-      priceAmount: m.priceAmount,
-      priceCurrency: m.priceCurrency,
-      priceInBase: m.priceAmount,
+      priceAmount: m.priceDivine,
+      priceCurrency: BASE_CURRENCY,
+      priceInBase: m.priceDivine,
       listedAt: new Date(),
     },
   });
@@ -63,44 +71,84 @@ async function persistItem(m: NinjaMappedItem, league: string): Promise<void> {
     data: {
       itemId: item.id,
       league,
-      totalListings: m.count,
-      validListings: m.count,
-      medianPrice: m.priceAmount,
-      medianPriceBase: m.priceAmount,
+      // The proxy exposes no listing counts, so supply is unknown (0).
+      totalListings: 0,
+      validListings: 0,
+      medianPrice: m.priceDivine,
+      medianPriceBase: m.priceDivine,
     },
   });
 
-  if (m.priceAmount != null) {
+  if (m.priceDivine != null) {
     await prisma.priceHistory.create({
-      data: { itemId: item.id, league, value: m.priceAmount },
+      data: { itemId: item.id, league, value: m.priceDivine },
     });
   }
+}
+
+/** Upsert currency conversion rates (1 divine = rate * <currency>) from `core`. */
+async function persistRates(
+  core: NinjaProxyResponse["core"],
+  league: string,
+): Promise<number> {
+  const rates = core?.rates ?? {};
+  let n = 0;
+  for (const [currency, rate] of Object.entries(rates)) {
+    if (typeof rate !== "number" || !isFinite(rate)) continue;
+    await prisma.currencyRate.upsert({
+      where: {
+        league_currency_base: { league, currency: BASE_CURRENCY, base: currency },
+      },
+      create: { league, currency: BASE_CURRENCY, base: currency, rate },
+      update: { rate },
+    });
+    n++;
+  }
+  return n;
 }
 
 export async function runIngest(client?: PoeNinjaClient): Promise<IngestSummary> {
   const league = process.env.POE_LEAGUE ?? "Standard";
   const ninja = client ?? ninjaClientFromEnv();
 
-  const summary: IngestSummary = { league, itemsUpserted: 0, byType: {}, errors: [] };
+  const summary: IngestSummary = {
+    league,
+    slug: "",
+    itemsUpserted: 0,
+    byType: {},
+    ratesUpserted: 0,
+    errors: [],
+  };
 
-  for (const type of NINJA_ITEM_TYPES) {
+  const overview = await ninja.getOverview();
+  summary.slug = ninja.slug;
+
+  try {
+    summary.ratesUpserted = await persistRates(overview.core, league);
+  } catch (err) {
+    summary.errors.push({
+      type: "core.rates",
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  const uniqueTypes = new Set<string>(NINJA_UNIQUE_TYPES);
+  for (const block of overview.itemOverviews ?? []) {
+    if (!uniqueTypes.has(block.type)) continue;
     try {
-      const overview = await ninja.getItemOverview(type);
-      const lines = overview.lines ?? [];
       let n = 0;
-      for (const line of lines) {
-        const mapped = mapNinjaLine(line, type, league);
+      for (const line of block.lines ?? []) {
+        const mapped = mapNinjaLine(line, block.type, ninja.slug);
         if (!mapped) continue;
         await persistItem(mapped, league);
         n++;
       }
-      summary.byType[type] = n;
+      summary.byType[block.type] = n;
       summary.itemsUpserted += n;
     } catch (err) {
-      // Keep going: one item-type endpoint failing (e.g. unconfirmed path)
-      // shouldn't abort the whole ingest.
+      // One category failing shouldn't abort the whole ingest.
       summary.errors.push({
-        type,
+        type: block.type,
         message: err instanceof Error ? err.message : String(err),
       });
     }
