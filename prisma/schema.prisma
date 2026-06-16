@@ -1,0 +1,172 @@
+// POE2 Meta Radar — data model (PRD §10)
+// Foundation scaffold: minimal-but-correct models that later phases flesh out.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Canonical item identity (a unique base/name, not a single listing).
+model Item {
+  id        String   @id @default(cuid())
+  name      String // e.g. "Mageblood", or the base type for rares
+  baseType  String // e.g. "Heavy Belt", "Recurve Bow"
+  category  Category
+  rarity    Rarity   @default(UNKNOWN)
+  iconUrl   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  listings        ItemListing[]
+  snapshots       ItemSnapshot[]
+  priceHistories  PriceHistory[]
+  supplyHistories SupplyHistory[]
+
+  @@unique([name, baseType, category])
+  @@index([category])
+}
+
+/// One observed trade listing at a point in time.
+model ItemListing {
+  id            String   @id @default(cuid())
+  item          Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  itemId        String
+  league        String
+  // The trade API result hash — used for idempotent upserts within a collection window.
+  rawHash       String   @unique
+  sellerAccount String?
+  // Price normalized bookkeeping.
+  priceAmount   Float?
+  priceCurrency String? // e.g. "exalted", "divine", "chaos"
+  priceInBase   Float? // priceAmount converted via CurrencyRate to the base currency
+  // Flagged by the outlier-removal pass (PRD §3.6). Null = not yet evaluated.
+  isOutlier     Boolean?
+  listedAt      DateTime?
+  collectedAt   DateTime @default(now())
+
+  mods ItemMod[]
+
+  @@index([itemId, collectedAt])
+  @@index([league])
+}
+
+/// A single normalized mod on a listing.
+model ItemMod {
+  id        String      @id @default(cuid())
+  listing   ItemListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  listingId String
+  rawText   String // original mod line from the API
+  modKey    String? // normalized ModKey (see src/lib/normalize/modKeys.ts); null if unmatched
+  value     Float? // extracted numeric value when applicable
+
+  @@index([listingId])
+  @@index([modKey])
+}
+
+/// Definition / display metadata for a normalized mod key.
+model ModDefinition {
+  modKey      String  @id // e.g. "CRITICAL_CHANCE"
+  displayName String // e.g. "Critical Hit Chance"
+  group       String? // higher-level grouping, e.g. "CRIT"
+  unit        String? // e.g. "%", "flat"
+}
+
+/// Aggregate metrics for an item from a single collection run (PRD §3.2).
+model ItemSnapshot {
+  id              String   @id @default(cuid())
+  item            Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  itemId          String
+  league          String
+  collectedAt     DateTime @default(now())
+  totalListings   Int      @default(0)
+  validListings   Int      @default(0)
+  premiumListings Int      @default(0)
+  medianPrice     Float?
+  medianPriceBase Float?
+
+  @@index([itemId, collectedAt])
+}
+
+/// Time series of price (PRD §3.2 가격 히스토리).
+model PriceHistory {
+  id        String   @id @default(cuid())
+  item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  itemId    String
+  league    String
+  ts        DateTime @default(now())
+  value     Float // price in base currency
+
+  @@index([itemId, ts])
+}
+
+/// Time series of supply (PRD §3.2 공급량 히스토리).
+model SupplyHistory {
+  id        String   @id @default(cuid())
+  item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  itemId    String
+  league    String
+  ts        DateTime @default(now())
+  total     Int
+  valid     Int
+
+  @@index([itemId, ts])
+}
+
+/// Option-group market share over time (PRD §3.4 Meta Radar).
+model MetaTrend {
+  id        String   @id @default(cuid())
+  category  Category
+  league    String
+  // The option group, e.g. "PHYSICAL_BOW", "CRIT_BOW".
+  group     String
+  ts        DateTime @default(now())
+  share     Float // 0..1
+  sampleN   Int      @default(0)
+
+  @@index([category, league, ts])
+}
+
+/// User/system alerts (PRD §6 관심 아이템 알림) — stub for later phases.
+model MarketAlert {
+  id        String   @id @default(cuid())
+  itemId    String?
+  kind      String // e.g. "PRICE_DROP", "SUPPLY_SPIKE"
+  threshold Float?
+  message   String?
+  createdAt DateTime @default(now())
+}
+
+/// Currency conversion rates to a base currency (PRD §3.6 통화 환산).
+model CurrencyRate {
+  id        String   @id @default(cuid())
+  league    String
+  currency  String // e.g. "divine"
+  base      String // e.g. "exalted"
+  rate      Float // 1 currency = rate * base
+  updatedAt DateTime @updatedAt
+
+  @@unique([league, currency, base])
+}
+
+enum Category {
+  BOW
+  BELT
+  AMULET
+  RING
+  UNIQUE
+  WEAPON
+  ARMOUR
+  OTHER
+}
+
+enum Rarity {
+  NORMAL
+  MAGIC
+  RARE
+  UNIQUE
+  UNKNOWN
+}
