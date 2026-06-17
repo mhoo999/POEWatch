@@ -1,5 +1,6 @@
 import type {
   NinjaCurrencyOverviewResponse,
+  NinjaItemLine,
   NinjaItemOverviewResponse,
 } from "./types";
 
@@ -14,7 +15,7 @@ import type {
  *       Inspect poe.ninja/poe2/economy in the browser network tab to capture
  *       the real item-overview request. The path below mirrors the PoE1 shape
  *       ({base}/poe2/api/data/itemoverview?league=&type=UniqueWeapon) and is a
- *       best-effort default; override via overviewPath if it differs.
+ *       best-effort default; override via POENINJA_ITEM_URL if it differs.
  *
  * poe.ninja rate limit is roughly 12 requests / 5 minutes, so we apply a
  * polite delay between calls. A descriptive User-Agent is sent.
@@ -24,6 +25,24 @@ const MIN_DELAY_MS = 1500;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Pull the array of item rows out of an overview response. poe.ninja's PoE2
+ * shape is undocumented, so tolerate several containers: a bare array, the
+ * PoE1 `{ lines: [...] }`, or any single array-valued top-level property
+ * (e.g. `items`, `entries`).
+ */
+export function extractLines(raw: unknown): NinjaItemLine[] {
+  if (Array.isArray(raw)) return raw as NinjaItemLine[];
+  if (raw && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    if (Array.isArray(obj.lines)) return obj.lines as NinjaItemLine[];
+    for (const v of Object.values(obj)) {
+      if (Array.isArray(v)) return v as NinjaItemLine[];
+    }
+  }
+  return [];
 }
 
 export class PoeNinjaError extends Error {
@@ -41,8 +60,16 @@ export interface PoeNinjaClientOptions {
   league: string;
   base?: string;
   userAgent?: string;
-  /** Override the item-overview path template if confirmed to differ. */
+  /** Override the item-overview path (combined with ?league=&type=). */
   itemOverviewPath?: string;
+  /**
+   * Full item-overview URL template with `{league}` / `{type}` placeholders,
+   * e.g. captured from the browser network tab. Takes precedence over
+   * itemOverviewPath, so the real PoE2 endpoint can be configured via env
+   * without code changes. Example:
+   *   https://poe.ninja/poe2/api/economy/exchange/current/overview?league={league}&type={type}
+   */
+  itemOverviewUrl?: string;
 }
 
 /** PoE2 item-overview categories — re-exported from the leaf constants module. */
@@ -54,6 +81,7 @@ export class PoeNinjaClient {
   private readonly base: string;
   private readonly userAgent: string;
   private readonly itemOverviewPath: string;
+  private readonly itemOverviewUrl?: string;
   private lastRequestAt = 0;
 
   constructor(opts: PoeNinjaClientOptions) {
@@ -63,6 +91,7 @@ export class PoeNinjaClient {
       opts.userAgent ?? "poewatch/0.1 (+https://github.com/mhoo999/poewatch)";
     // PoE1-style default; confirm against the live PoE2 site.
     this.itemOverviewPath = opts.itemOverviewPath ?? "/poe2/api/data/itemoverview";
+    this.itemOverviewUrl = opts.itemOverviewUrl;
   }
 
   private async throttle(): Promise<void> {
@@ -87,12 +116,23 @@ export class PoeNinjaClient {
     return (await res.json()) as T;
   }
 
+  /** Build the item-overview URL, preferring an explicit template if given. */
+  private itemUrl(type: string): string {
+    if (this.itemOverviewUrl) {
+      return this.itemOverviewUrl
+        .replace(/\{league\}/g, encodeURIComponent(this.league))
+        .replace(/\{type\}/g, encodeURIComponent(type));
+    }
+    return (
+      `${this.base}${this.itemOverviewPath}` +
+      `?league=${encodeURIComponent(this.league)}&type=${encodeURIComponent(type)}`
+    );
+  }
+
   /** Fetch an item overview (e.g. "UniqueWeapon"). */
   async getItemOverview(type: string): Promise<NinjaItemOverviewResponse> {
-    const url =
-      `${this.base}${this.itemOverviewPath}` +
-      `?league=${encodeURIComponent(this.league)}&type=${encodeURIComponent(type)}`;
-    return this.getJson<NinjaItemOverviewResponse>(url);
+    const raw = await this.getJson<unknown>(this.itemUrl(type));
+    return { lines: extractLines(raw) };
   }
 
   /** Fetch the currency-exchange overview (confirmed endpoint). */
@@ -115,5 +155,6 @@ export function ninjaClientFromEnv(): PoeNinjaClient {
     base: process.env.POENINJA_BASE || undefined,
     userAgent: process.env.POE_USER_AGENT || undefined,
     itemOverviewPath: process.env.POENINJA_ITEM_PATH || undefined,
+    itemOverviewUrl: process.env.POENINJA_ITEM_URL || undefined,
   });
 }
