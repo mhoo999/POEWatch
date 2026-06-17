@@ -87,9 +87,15 @@ export async function runIngest(client?: PoeNinjaClient): Promise<IngestSummary>
   const league = process.env.POE_LEAGUE ?? "Standard";
   const ninja = client ?? ninjaClientFromEnv();
 
+  // Allow overriding the category list without a code change, e.g.
+  // POENINJA_ITEM_TYPES="UniqueWeapon,UniqueArmour,UniqueAccessory".
+  const types =
+    process.env.POENINJA_ITEM_TYPES?.split(",").map((s) => s.trim()).filter(Boolean) ??
+    [...NINJA_ITEM_TYPES];
+
   const summary: IngestSummary = { league, itemsUpserted: 0, byType: {}, errors: [] };
 
-  for (const type of NINJA_ITEM_TYPES) {
+  for (const type of types) {
     try {
       const overview = await ninja.getItemOverview(type);
       const lines = overview.lines ?? [];

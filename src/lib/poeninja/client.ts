@@ -7,15 +7,12 @@ import type {
 /**
  * Client for the poe.ninja PoE2 economy API.
  *
- * Endpoints (undocumented, discovered via network interception):
- *   - Currency (confirmed):
- *       GET {base}/poe2/api/economy/currencyexchange/overview
- *           ?leagueName={league}&overviewName=Currency
- *   - Items (NOT publicly documented — CONFIRM before relying on it):
- *       Inspect poe.ninja/poe2/economy in the browser network tab to capture
- *       the real item-overview request. The path below mirrors the PoE1 shape
- *       ({base}/poe2/api/data/itemoverview?league=&type=UniqueWeapon) and is a
- *       best-effort default; override via POENINJA_ITEM_URL if it differs.
+ * Single overview endpoint for every category (confirmed via network capture):
+ *   GET {base}/poe2/api/economy/exchange/current/overview?league={League}&type={Type}
+ *   e.g. ...?league=Runes of Aldur&type=Currency
+ * The `type` selects the category (Currency, plus the unique-item categories
+ * such as UniqueWeapon/UniqueArmour — see constants.ts / POENINJA_ITEM_TYPES).
+ * Override the whole URL via POENINJA_ITEM_URL only if poe.ninja changes it.
  *
  * poe.ninja rate limit is roughly 12 requests / 5 minutes, so we apply a
  * polite delay between calls. A descriptive User-Agent is sent.
@@ -89,8 +86,9 @@ export class PoeNinjaClient {
     this.base = (opts.base ?? "https://poe.ninja").replace(/\/$/, "");
     this.userAgent =
       opts.userAgent ?? "poewatch/0.1 (+https://github.com/mhoo999/poewatch)";
-    // PoE1-style default; confirm against the live PoE2 site.
-    this.itemOverviewPath = opts.itemOverviewPath ?? "/poe2/api/data/itemoverview";
+    // Confirmed PoE2 endpoint (network capture). Same path for every category.
+    this.itemOverviewPath =
+      opts.itemOverviewPath ?? "/poe2/api/economy/exchange/current/overview";
     this.itemOverviewUrl = opts.itemOverviewUrl;
   }
 
@@ -135,12 +133,9 @@ export class PoeNinjaClient {
     return { lines: extractLines(raw) };
   }
 
-  /** Fetch the currency-exchange overview (confirmed endpoint). */
+  /** Fetch the currency overview (same endpoint, type=Currency). */
   async getCurrencyOverview(): Promise<NinjaCurrencyOverviewResponse> {
-    const url =
-      `${this.base}/poe2/api/economy/currencyexchange/overview` +
-      `?leagueName=${encodeURIComponent(this.league)}&overviewName=Currency`;
-    return this.getJson<NinjaCurrencyOverviewResponse>(url);
+    return this.getJson<NinjaCurrencyOverviewResponse>(this.itemUrl("Currency"));
   }
 }
 
