@@ -1,9 +1,8 @@
 import { prisma } from "@/lib/db";
-import {
-  ninjaClientFromEnv,
-  NINJA_ITEM_TYPES,
-  PoeNinjaClient,
-} from "@/lib/poeninja/client";
+import { ninjaClientFromEnv, PoeNinjaClient } from "@/lib/poeninja/client";
+// Import the iteration constant directly from the leaf module (not via client)
+// so CJS interop can't leave it undefined ("NINJA_ITEM_TYPES is not iterable").
+import { NINJA_ITEM_TYPES } from "@/lib/poeninja/constants";
 import { mapNinjaLine, type NinjaMappedItem } from "@/lib/poeninja/map";
 
 /**
