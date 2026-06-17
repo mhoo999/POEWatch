@@ -1,10 +1,10 @@
 /**
- * poe.ninja (EE2 proxy) ingestion entrypoint.
+ * poe.ninja ingestion entrypoint.
  *   npm run ingest
  *
- * Populates the DB with PoE2 unique items (name, base/variant, price in Divine
- * Orbs) plus currency conversion rates so the dashboard shows real data. Run
- * from an environment with internet access and a reachable DATABASE_URL.
+ * Populates the DB with PoE2 unique items (name, poecdn icon, price, supply)
+ * so the dashboard shows real data. Run from an environment with internet
+ * access to poe.ninja and a reachable DATABASE_URL.
  */
 import "dotenv/config";
 import { prisma } from "@/lib/db";
@@ -13,21 +13,23 @@ import { PoeNinjaError } from "@/lib/poeninja/client";
 
 async function main() {
   const summary = await runIngest();
-  console.log(
-    `[ingest] league=${summary.league} slug=${summary.slug} ` +
-      `itemsUpserted=${summary.itemsUpserted} ratesUpserted=${summary.ratesUpserted}`,
-  );
+  console.log(`[ingest] league=${summary.league} itemsUpserted=${summary.itemsUpserted}`);
   for (const [type, n] of Object.entries(summary.byType)) {
     console.log(`[ingest]   ${type}: ${n}`);
   }
   for (const e of summary.errors) {
     console.error(`[ingest] ERROR ${e.type}: ${e.message}`);
   }
+  if (summary.sampleKeys) {
+    console.log(`[ingest] sample line keys: ${summary.sampleKeys.join(", ")}`);
+    console.log(
+      `[ingest] sample line JSON:\n${JSON.stringify(summary.sampleLine, null, 2).slice(0, 2000)}`,
+    );
+  }
   if (summary.itemsUpserted === 0) {
     console.error(
-      "[ingest] No items ingested. Check that POE_LEAGUE maps to a live proxy " +
-        "slug (league | leaguehc | standard | standardhc), or set " +
-        "POENINJA_LEAGUE_SLUG explicitly.",
+      "[ingest] No items ingested. The poe.ninja PoE2 item-overview path may be " +
+        "wrong — confirm it via the browser network tab and set POENINJA_ITEM_PATH.",
     );
   }
 }
